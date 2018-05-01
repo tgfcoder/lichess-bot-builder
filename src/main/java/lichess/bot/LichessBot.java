@@ -5,31 +5,35 @@ import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lichess.bot.model.Account;
-import lichess.bot.model.Event;
-import lichess.bot.model.GameEvent;
-import lichess.bot.model.OkErrorResponse;
+import lichess.bot.chess.Color;
+import lichess.bot.model.*;
+import lichess.bot.model.Event.Challenge;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadPoolExecutor;
 
 import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES;
 
 /**
  * Extend this class to create your Lichess bot.
  */
-public class LichessBot {
+public abstract class LichessBot {
     private static final String ENDPOINT = "https://lichess.org";
     private static final ObjectMapper mapper = new ObjectMapper().configure(FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private static final int MAX_NUMBER_GAMES = 8;
 
     private final URL server;
     private final String apiToken;
-    private final ExecutorService gameExecutorService = Executors.newFixedThreadPool(1);
+    private final ExecutorService gameExecutorService = Executors.newFixedThreadPool(MAX_NUMBER_GAMES);
+
+    private String userId = "?";
+    private String username = "?";
 
     /**
      * Creates the bot client with the given apiToken. The account this token is tied to must already be registered
@@ -65,10 +69,8 @@ public class LichessBot {
                 throw new IllegalArgumentException("apiToken does not point to a BOT account. If you want to register, pass true in bot constructor.");
             }
         }
-    }
 
-    public void setMaxGameLimit(int maxGameLimit) {
-        ((ThreadPoolExecutor) this.gameExecutorService).setCorePoolSize(maxGameLimit);
+        System.out.println("Session open with username " + username);
     }
 
     /**
@@ -86,11 +88,23 @@ public class LichessBot {
                         sendChallengeDecline(e.challenge);
                     }
                 } else if (Event.EVENT_TYPE_GAME_START.equals(e.type)) {
-                    gameExecutorService.submit(new GameRunner(e.game.id));
+                    gameExecutorService.submit(new GameRunner(e.game.id, newEngineInstance()));
                 }
             });
         }
     }
+
+    /**
+     * Create a new engine instance to handle one chess game.
+     */
+    protected abstract Engine newEngineInstance();
+
+    /**
+     * Whether or not to accept this incoming challenge.
+     *
+     * @param challenge Challenge information.
+     */
+    protected abstract boolean acceptChallenge(Challenge challenge);
 
     private <T> void processStream(InputStream in, Class<T> valueType, ValueProcessor<T> processor) throws IOException {
         JsonParser parser = new JsonFactory().createParser(in);
@@ -133,46 +147,33 @@ public class LichessBot {
         }
     }
 
-    private interface ValueProcessor<T> {
-        void process(T value) throws IOException;
-    }
-
-    private void sendChallengeAccept(Event.Challenge challenge) throws IOException {
+    private void sendChallengeAccept(Challenge challenge) throws IOException {
         try (InputStream in = post(String.format("api/challenge/%s/accept", challenge.id))) {
             OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
             if (response.ok) {
                 System.out.println("Challenge " + challenge.id + " accepted.");
-                return;
             } else {
                 System.out.println("Failed to accept challenge " + challenge.id + " because: " + response.error);
             }
         }
     }
 
-    private void sendChallengeDecline(Event.Challenge challenge) throws IOException {
+    private void sendChallengeDecline(Challenge challenge) throws IOException {
         try (InputStream in = post(String.format("api/challenge/%s/decline", challenge.id))) {
             OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
             if (response.ok) {
                 System.out.println("Challenge " + challenge.id + " declined.");
-                return;
             } else {
                 System.out.println("Failed to decline challenge " + challenge.id + " because: " + response.error);
             }
         }
     }
 
-    /**
-     * Whether or not to accept this incoming challenge.
-     *
-     * @param challenge Challenge information.
-     */
-    private boolean acceptChallenge(Event.Challenge challenge) {
-        return true;
-    }
-
     private boolean validate() throws IOException {
         try (InputStream in = get("api/account")) {
             Account account = mapper.readValue(in, Account.class);
+            userId = account.id;
+            username = account.username;
             return account.title != null && account.title.toLowerCase().equals("bot");
         }
     }
@@ -185,18 +186,38 @@ public class LichessBot {
     }
 
     private InputStream post(String path) throws IOException {
+        return post(path, "");
+    }
+
+    private InputStream post(String path, String formData) throws IOException {
+        byte[] postData = formData.getBytes(StandardCharsets.UTF_8);
+        int postDataLength = postData.length;
+
         URL url = new URL(server, path);
         HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
         urlConnection.setRequestMethod("POST");
         urlConnection.addRequestProperty("Authorization", "Bearer " + apiToken);
+        if (postDataLength > 0) {
+            urlConnection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            try (DataOutputStream dos = new DataOutputStream(urlConnection.getOutputStream())) {
+                dos.write(postData);
+            }
+        }
         return urlConnection.getInputStream();
+    }
+
+    private interface ValueProcessor<T> {
+        void process(T value) throws IOException;
     }
 
     private class GameRunner implements Runnable {
         private final String gameId;
+        private final Engine engine;
+        private Color myColor = Color.UNKNOWN;
 
-        public GameRunner(String gameId) {
+        public GameRunner(String gameId, Engine engine) {
             this.gameId = gameId;
+            this.engine = engine;
         }
 
         @Override
@@ -204,25 +225,109 @@ public class LichessBot {
             try (InputStream in = get("api/bot/game/stream/" + gameId)) {
                 processStream(in, GameEvent.class, (GameEvent ge) -> {
                     if (GameEvent.GAME_EVENT_TYPE_CHAT.equals(ge.type)) {
-                        makeMove(ge.text.trim().substring(0, 4));
+                        if (ge.room.equals("player") && !ge.username.equals(username)) {
+                            String reply = engine.onChatMessage(ge.username, ge.text);
+                            if (reply != null && reply.trim().length() > 0) {
+                                sendMessage(reply);
+                            }
+                        }
+                    } else if (GameEvent.GAME_EVENT_TYPE_FULL.equals(ge.type)) {
+                        setMyColor(ge.white, ge.black);
+                        engine.initializeBoardState(ge.initialFen);
+                        engine.updateGameState(ge.state.moves, ge.state.wtime, ge.state.btime, ge.state.winc, ge.state.binc);
+                        if (isMyMove(ge.state.moves)) {
+                            makeMove(engine.makeMove());
+                        }
+                    } else if (GameEvent.GAME_EVENT_TYPE_STATE.equals(ge.type)) {
+                        engine.updateGameState(ge.moves, ge.wtime, ge.btime, ge.winc, ge.binc);
+                        if (isMyMove(ge.moves)) {
+                            makeMove(engine.makeMove());
+                        }
                     }
                 });
-            } catch (IOException e) {
-                System.out.println("IOException during game");
-                throw new RuntimeException("IOException occurred during game", e);
+            } catch (Exception e) {
+                System.out.println("Exception occurred during game " + gameId + ". Game processing stopped.");
+                e.printStackTrace();
+                throw new RuntimeException("Exception occurred during game", e);
             }
         }
 
-        private void makeMove(String moveToMake) {
+        private void sendMessage(String text) throws IOException {
+            try (InputStream in = post(String.format("api/bot/game/%s/chat", gameId), "room=player&text=" + text)) {
+                OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
+                if (response.ok) {
+                    System.out.println("Message sent: " + text);
+                } else {
+                    System.out.println("Couldn't send message '" + text + "' because: " + response.error);
+                }
+            }
+        }
+
+        private void setMyColor(User white, User black) {
+            if (white.id.equals(userId)) {
+                myColor = Color.WHITE;
+            } else if (black.id.equals(userId)) {
+                myColor = Color.BLACK;
+            } else {
+                throw new IllegalStateException("In a game where neither player's ID matches my own. White: " + white.id + ", Black: " + black.id + ", Me: " + userId);
+            }
+        }
+
+        private boolean isMyMove(String moves) {
+            if (moves == null || moves.trim().isEmpty()) {
+                return myColor == Color.WHITE;
+            }
+
+            String[] moveArray = moves.trim().split(" ");
+
+            if (moveArray.length % 2 == 0) {
+                // White's turn
+                return myColor == Color.WHITE;
+            } else {
+                // Black's turn
+                return myColor == Color.BLACK;
+            }
+        }
+
+        private void makeMove(String moveToMake) throws IOException {
+            boolean invalidMove = false;
+
+            if (moveToMake == null) {
+                invalidMove = true;
+            } else {
+                if (moveToMake.toLowerCase().equals("resign")) {
+                    resign();
+                    return;
+                } else if (moveToMake.length() != 4) {
+                    invalidMove = true;
+                }
+            }
+
+            if (invalidMove) {
+                throw new IllegalArgumentException("Invalid move: " + moveToMake);
+            }
+
+            System.out.println("Making move " + moveToMake);
             try (InputStream moveIs = post(String.format("api/bot/game/%s/move/%s", gameId, moveToMake))) {
                 OkErrorResponse response = mapper.readValue(moveIs, OkErrorResponse.class);
                 if (response.ok) {
-                    System.out.println("Move made: " + moveToMake);
+                    System.out.println("Move made successfully: " + moveToMake);
                 } else {
                     System.out.println("Couldn't make move because: " + response.error);
                 }
             } catch (IOException e) {
-                System.out.println("Couldn't make move");
+                System.out.println("Unable to make move " + moveToMake + ": " + e.getMessage());
+            }
+        }
+
+        private void resign() throws IOException {
+            try (InputStream in = post(String.format("api/bot/game/%s/resign", gameId))) {
+                OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
+                if (response.ok) {
+                    System.out.println("Game resigned: " + gameId);
+                } else {
+                    System.out.println("Couldn't resign game " + gameId + " because: " + response.error);
+                }
             }
         }
     }
