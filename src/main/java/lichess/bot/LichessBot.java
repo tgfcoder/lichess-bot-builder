@@ -198,6 +198,7 @@ public abstract class LichessBot {
         urlConnection.setRequestMethod("POST");
         urlConnection.addRequestProperty("Authorization", "Bearer " + apiToken);
         if (postDataLength > 0) {
+            urlConnection.setDoOutput(true);
             urlConnection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             try (DataOutputStream dos = new DataOutputStream(urlConnection.getOutputStream())) {
                 dos.write(postData);
