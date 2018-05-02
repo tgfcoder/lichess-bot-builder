@@ -57,13 +57,11 @@ public abstract class LichessBot {
 
         if (!validate()) {
             if (registerBot) {
-                try (InputStream in = post("api/bot/account/upgrade")) {
-                    OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
-                    if (response.ok) {
-                        System.out.println("Bot account successfully registered");
-                    } else {
-                        throw new IllegalArgumentException("Unable to register bot account: " + response.error);
-                    }
+                OkErrorResponse response = post("api/bot/account/upgrade");
+                if (response.ok) {
+                    System.out.println("Bot account successfully registered");
+                } else {
+                    throw new IllegalArgumentException("Unable to register bot account: " + response.error);
                 }
             } else {
                 throw new IllegalArgumentException("apiToken does not point to a BOT account. If you want to register, pass true in bot constructor.");
@@ -148,24 +146,20 @@ public abstract class LichessBot {
     }
 
     private void sendChallengeAccept(Challenge challenge) throws IOException {
-        try (InputStream in = post(String.format("api/challenge/%s/accept", challenge.id))) {
-            OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
-            if (response.ok) {
-                System.out.println("Challenge " + challenge.id + " accepted.");
-            } else {
-                System.out.println("Failed to accept challenge " + challenge.id + " because: " + response.error);
-            }
+        OkErrorResponse response = post(String.format("api/challenge/%s/accept", challenge.id));
+        if (response.ok) {
+            System.out.println("Challenge " + challenge.id + " accepted.");
+        } else {
+            System.out.println("Failed to accept challenge " + challenge.id + " because: " + response.error);
         }
     }
 
     private void sendChallengeDecline(Challenge challenge) throws IOException {
-        try (InputStream in = post(String.format("api/challenge/%s/decline", challenge.id))) {
-            OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
-            if (response.ok) {
-                System.out.println("Challenge " + challenge.id + " declined.");
-            } else {
-                System.out.println("Failed to decline challenge " + challenge.id + " because: " + response.error);
-            }
+        OkErrorResponse response = post(String.format("api/challenge/%s/decline", challenge.id));
+        if (response.ok) {
+            System.out.println("Challenge " + challenge.id + " declined.");
+        } else {
+            System.out.println("Failed to decline challenge " + challenge.id + " because: " + response.error);
         }
     }
 
@@ -174,29 +168,25 @@ public abstract class LichessBot {
             Account account = mapper.readValue(in, Account.class);
             userId = account.id;
             username = account.username;
-            return account.title != null && account.title.toLowerCase().equals("bot");
+            return account.title != null && account.title.equalsIgnoreCase("bot");
         }
     }
 
     private InputStream get(String path) throws IOException {
-        URL url = new URL(server, path);
-        HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-        urlConnection.addRequestProperty("Authorization", "Bearer " + apiToken);
+        HttpURLConnection urlConnection = openConnection(path);
         return urlConnection.getInputStream();
     }
 
-    private InputStream post(String path) throws IOException {
+    private OkErrorResponse post(String path) throws IOException {
         return post(path, "");
     }
 
-    private InputStream post(String path, String formData) throws IOException {
+    private OkErrorResponse post(String path, String formData) throws IOException {
         byte[] postData = formData.getBytes(StandardCharsets.UTF_8);
         int postDataLength = postData.length;
 
-        URL url = new URL(server, path);
-        HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+        HttpURLConnection urlConnection = openConnection(path);
         urlConnection.setRequestMethod("POST");
-        urlConnection.addRequestProperty("Authorization", "Bearer " + apiToken);
         if (postDataLength > 0) {
             urlConnection.setDoOutput(true);
             urlConnection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
@@ -204,7 +194,17 @@ public abstract class LichessBot {
                 dos.write(postData);
             }
         }
-        return urlConnection.getInputStream();
+        
+        try (InputStream in = urlConnection.getInputStream()) {
+            return mapper.readValue(in, OkErrorResponse.class);
+        }
+    }
+
+    private HttpURLConnection openConnection(String path) throws IOException {
+        URL url = new URL(server, path);
+        HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+        urlConnection.addRequestProperty("Authorization", "Bearer " + apiToken);
+        return urlConnection;
     }
 
     private interface ValueProcessor<T> {
@@ -254,13 +254,11 @@ public abstract class LichessBot {
         }
 
         private void sendMessage(String text) throws IOException {
-            try (InputStream in = post(String.format("api/bot/game/%s/chat", gameId), "room=player&text=" + text)) {
-                OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
-                if (response.ok) {
-                    System.out.println("Message sent: " + text);
-                } else {
-                    System.out.println("Couldn't send message '" + text + "' because: " + response.error);
-                }
+            OkErrorResponse response = post(String.format("api/bot/game/%s/chat", gameId), "room=player&text=" + text);
+            if (response.ok) {
+                System.out.println("Message sent: " + text);
+            } else {
+                System.out.println("Couldn't send message '" + text + "' because: " + response.error);
             }
         }
 
@@ -309,8 +307,8 @@ public abstract class LichessBot {
             }
 
             System.out.println("Making move " + moveToMake);
-            try (InputStream moveIs = post(String.format("api/bot/game/%s/move/%s", gameId, moveToMake))) {
-                OkErrorResponse response = mapper.readValue(moveIs, OkErrorResponse.class);
+            try {
+                OkErrorResponse response = post(String.format("api/bot/game/%s/move/%s", gameId, moveToMake));
                 if (response.ok) {
                     System.out.println("Move made successfully: " + moveToMake);
                 } else {
@@ -322,13 +320,11 @@ public abstract class LichessBot {
         }
 
         private void resign() throws IOException {
-            try (InputStream in = post(String.format("api/bot/game/%s/resign", gameId))) {
-                OkErrorResponse response = mapper.readValue(in, OkErrorResponse.class);
-                if (response.ok) {
-                    System.out.println("Game resigned: " + gameId);
-                } else {
-                    System.out.println("Couldn't resign game " + gameId + " because: " + response.error);
-                }
+            OkErrorResponse response = post(String.format("api/bot/game/%s/resign", gameId));
+            if (response.ok) {
+                System.out.println("Game resigned: " + gameId);
+            } else {
+                System.out.println("Couldn't resign game " + gameId + " because: " + response.error);
             }
         }
     }
