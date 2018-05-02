@@ -170,9 +170,9 @@ public abstract class LichessBot {
         }
 
         private void setMyColor(User white, User black) {
-            if (white.id.equals(userId)) {
+            if (white.id != null && white.id.equals(userId)) {
                 myColor = Color.WHITE;
-            } else if (black.id.equals(userId)) {
+            } else if (black.id != null && black.id.equals(userId)) {
                 myColor = Color.BLACK;
             } else {
                 throw new IllegalStateException("In a game where neither player's ID matches my own. White: " + white.id + ", Black: " + black.id + ", Me: " + userId);
