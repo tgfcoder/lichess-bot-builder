@@ -1,20 +1,25 @@
 package lichess.bot;
 
 import lichess.bot.chess.Color;
-import lichess.bot.model.*;
+import lichess.bot.model.Account;
+import lichess.bot.model.Event;
 import lichess.bot.model.Event.Challenge;
+import lichess.bot.model.GameEvent;
+import lichess.bot.model.User;
 import lichess.client.LichessRestClient;
 import lichess.client.LichessServiceException;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 /**
  * Extend this class to create your Lichess bot.
  */
 public abstract class LichessBot {
     private static final int MAX_NUMBER_GAMES = 8;
+    public static final Pattern VALID_MOVE_PATTERN = Pattern.compile("[a-h][1-8][a-h][1-8][knbrq]?");
 
     private final LichessRestClient client;
     private final ExecutorService gameExecutorService = Executors.newFixedThreadPool(MAX_NUMBER_GAMES);
@@ -196,10 +201,12 @@ public abstract class LichessBot {
             if (moveToMake == null) {
                 invalidMove = true;
             } else {
-                if (moveToMake.toLowerCase().equals("resign")) {
+                moveToMake = moveToMake.toLowerCase().trim();
+
+                if (moveToMake.equals("resign")) {
                     resign();
                     return;
-                } else if (moveToMake.length() != 4) {
+                } else if (!validMoveFormat(moveToMake)) {
                     invalidMove = true;
                 }
             }
@@ -219,6 +226,10 @@ public abstract class LichessBot {
             } catch (IOException e) {
                 System.out.println("Unable to make move " + moveToMake + ": " + e.getMessage());
             }
+        }
+
+        private boolean validMoveFormat(String move) {
+            return VALID_MOVE_PATTERN.matcher(move).matches();
         }
 
         private void resign() throws IOException {
