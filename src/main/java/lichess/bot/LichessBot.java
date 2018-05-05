@@ -141,7 +141,7 @@ public abstract class LichessBot {
                         }
                     } else if (GameEvent.GAME_EVENT_TYPE_FULL.equals(ge.type)) {
                         setMyColor(ge.white, ge.black);
-                        engine.initializeBoardState(ge.initialFen);
+                        engine.initializeBoardState(ge.initialFen, myColor == Color.WHITE);
                         engine.updateGameState(ge.state.moves, ge.state.wtime, ge.state.btime, ge.state.winc, ge.state.binc);
                         if (isMyMove(ge.state.moves)) {
                             makeMove(engine.makeMove());

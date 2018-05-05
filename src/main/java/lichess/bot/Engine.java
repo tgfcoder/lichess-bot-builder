@@ -9,9 +9,9 @@ public interface Engine {
     String onChatMessage(String username, String text);
 
     /**
-     * Set up the initial state of the chessboard with FEN notation.
+     * Set up the initial state of the chessboard with FEN notation and whether the engine is playing White or not.
      */
-    void initializeBoardState(String initialFen);
+    void initializeBoardState(String initialFen, boolean white);
 
     /**
      * Update the game state after a move.

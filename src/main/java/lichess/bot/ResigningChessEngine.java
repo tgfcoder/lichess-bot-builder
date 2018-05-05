@@ -10,7 +10,7 @@ public class ResigningChessEngine implements Engine {
     }
 
     @Override
-    public void initializeBoardState(String initialFen) {
+    public void initializeBoardState(String initialFen, boolean white) {
 
     }
 
