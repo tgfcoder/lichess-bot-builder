@@ -1,11 +1,8 @@
 package lichess.bot;
 
-import lichess.bot.chess.Color;
 import lichess.bot.model.Account;
 import lichess.bot.model.Event;
 import lichess.bot.model.Event.Challenge;
-import lichess.bot.model.GameEvent;
-import lichess.bot.model.User;
 import lichess.client.LichessRestClient;
 import lichess.client.LichessServiceException;
 
@@ -24,8 +21,7 @@ public abstract class LichessBot {
     private final LichessRestClient client;
     private final ExecutorService gameExecutorService = Executors.newFixedThreadPool(MAX_NUMBER_GAMES);
 
-    private String userId = "?";
-    private String username = "?";
+    private final Account account;
 
     /**
      * Creates the bot client with the given apiToken. The account this token is tied to must already be registered
@@ -45,8 +41,9 @@ public abstract class LichessBot {
      */
     public LichessBot(String apiToken, boolean registerBot) throws IOException {
         this.client = new LichessRestClient(apiToken);
+        this.account = client.get("api/account", Account.class);
 
-        if (!validate()) {
+        if (!account.isBot()) {
             if (registerBot) {
                 try {
                     client.post("api/bot/account/upgrade");
@@ -59,7 +56,7 @@ public abstract class LichessBot {
             }
         }
 
-        System.out.println("Session open with username " + username);
+        System.out.println("Session open with username " + account.username);
     }
 
     /**
@@ -82,7 +79,7 @@ public abstract class LichessBot {
             break;
             
         case GAME_START:
-            gameExecutorService.submit(new GameRunner(e.game.id, newEngineInstance()));
+            gameExecutorService.submit(new LichessGameRunner(account, e.game.id, client, newEngineInstance()));
             break;
         }
     }
@@ -114,145 +111,6 @@ public abstract class LichessBot {
             System.out.println("Challenge " + challenge.id + " declined.");
         } catch (LichessServiceException e) {
             System.out.println("Failed to decline challenge " + challenge.id + " because: " + e.getMessage());
-        }
-    }
-
-    private boolean validate() throws IOException {
-        Account account = client.get("api/account", Account.class);
-        userId = account.id;
-        username = account.username;
-        return account.title != null && account.title.equalsIgnoreCase("bot");
-    }
-
-    private class GameRunner implements Runnable {
-        private final String gameId;
-        private final Engine engine;
-        private Color myColor = Color.UNKNOWN;
-
-        public GameRunner(String gameId, Engine engine) {
-            this.gameId = gameId;
-            this.engine = engine;
-        }
-
-        @Override
-        public void run() {
-            try {
-                client.stream("api/bot/game/stream/" + gameId, GameEvent.class, this::processEvent);
-            } catch (Exception e) {
-                System.out.println("Exception occurred during game " + gameId + ". Game processing stopped.");
-                e.printStackTrace();
-                throw new RuntimeException("Exception occurred during game", e);
-            }
-        }
-        
-        private void processEvent(GameEvent ge) throws IOException {
-            switch (ge.type) {
-            case CHAT:
-                if (ge.room.equals("player") && !ge.username.equals(username)) {
-                    String reply = engine.onChatMessage(ge.username, ge.text);
-                    if (reply != null && reply.trim().length() > 0) {
-                        sendMessage(reply);
-                    }
-                }
-                break;
-                
-            case FULL:
-                setMyColor(ge.white, ge.black);
-                engine.initializeBoardState(ge.initialFen, myColor == Color.WHITE);
-                engine.updateGameState(ge.state.moves, ge.state.wtime, ge.state.btime, ge.state.winc, ge.state.binc);
-                if (isMyMove(ge.state.moves)) {
-                    makeMove(engine.makeMove());
-                }
-                break;
-                
-            case STATE:
-                engine.updateGameState(ge.moves, ge.wtime, ge.btime, ge.winc, ge.binc);
-                if (isMyMove(ge.moves)) {
-                    makeMove(engine.makeMove());
-                }
-                break;
-            }
-        }
-
-        private void sendMessage(String text) throws IOException {
-            try {
-                client.post(String.format("api/bot/game/%s/chat", gameId), "room=player&text=" + text);
-                System.out.println("Message sent: " + text);
-            } catch (LichessServiceException e) {
-                System.out.println("Couldn't send message '" + text + "' because: " + e.getMessage());
-            }
-        }
-
-        private void setMyColor(User white, User black) {
-            if (white.id != null && white.id.equals(userId)) {
-                myColor = Color.WHITE;
-            } else if (black.id != null && black.id.equals(userId)) {
-                myColor = Color.BLACK;
-            } else {
-                throw new IllegalStateException("In a game where neither player's ID matches my own. White: " + white.id + ", Black: " + black.id + ", Me: " + userId);
-            }
-        }
-
-        private boolean isMyMove(String moves) {
-            if (moves == null || moves.trim().isEmpty()) {
-                return myColor == Color.WHITE;
-            }
-
-            String[] moveArray = moves.trim().split(" ");
-
-            if (moveArray.length % 2 == 0) {
-                // White's turn
-                return myColor == Color.WHITE;
-            } else {
-                // Black's turn
-                return myColor == Color.BLACK;
-            }
-        }
-
-        private void makeMove(String moveToMake) throws IOException {
-            boolean invalidMove = false;
-
-            if (moveToMake == null) {
-                invalidMove = true;
-            } else {
-                moveToMake = moveToMake.toLowerCase().trim();
-
-                if (moveToMake.equals("resign")) {
-                    resign();
-                    return;
-                } else if (!validMoveFormat(moveToMake)) {
-                    invalidMove = true;
-                }
-            }
-
-            if (invalidMove) {
-                throw new IllegalArgumentException("Invalid move: " + moveToMake);
-            }
-
-            System.out.println("Making move " + moveToMake);
-            try {
-                try {
-                    client.post(String.format("api/bot/game/%s/move/%s", gameId, moveToMake));
-                    System.out.println("Move made successfully: " + moveToMake);
-                } catch (LichessServiceException e) {
-                    System.out.println("Couldn't make move because: " + e.getMessage());
-                }
-            } catch (IOException e) {
-                System.out.println("Unable to make move " + moveToMake + ": " + e.getMessage());
-            }
-        }
-
-        private boolean validMoveFormat(String move) {
-            return VALID_MOVE_PATTERN.matcher(move).matches();
-        }
-
-        private void resign() throws IOException {
-            try {
-                client.post(String.format("api/bot/game/%s/resign", gameId));
-                System.out.println("Game resigned: " + gameId);
-            } catch (LichessServiceException e) {
-                System.out.println("Couldn't resign game " + gameId + " because: " + e.getMessage());
-            }
         }
     }
 }
