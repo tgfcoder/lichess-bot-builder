@@ -68,17 +68,23 @@ public abstract class LichessBot {
      * Much code lifted from https://sohlich.github.io/post/jackson/
      */
     public void listen() throws IOException {
-        client.stream("api/stream/event", Event.class, (Event e) -> {
-            if (Event.EVENT_TYPE_CHALLENGE.equals(e.type)) {
-                if (acceptChallenge(e.challenge)) {
-                    sendChallengeAccept(e.challenge);
-                } else {
-                    sendChallengeDecline(e.challenge);
-                }
-            } else if (Event.EVENT_TYPE_GAME_START.equals(e.type)) {
-                gameExecutorService.submit(new GameRunner(e.game.id, newEngineInstance()));
+        client.stream("api/stream/event", Event.class, this::processEvent);
+    }
+    
+    private void processEvent(Event e) throws IOException {
+        switch (e.type) {
+        case CHALLENGE:
+            if (acceptChallenge(e.challenge)) {
+                sendChallengeAccept(e.challenge);
+            } else {
+                sendChallengeDecline(e.challenge);
             }
-        });
+            break;
+            
+        case GAME_START:
+            gameExecutorService.submit(new GameRunner(e.game.id, newEngineInstance()));
+            break;
+        }
     }
 
     /**
@@ -131,32 +137,40 @@ public abstract class LichessBot {
         @Override
         public void run() {
             try {
-                client.stream("api/bot/game/stream/" + gameId, GameEvent.class, (GameEvent ge) -> {
-                    if (GameEvent.GAME_EVENT_TYPE_CHAT.equals(ge.type)) {
-                        if (ge.room.equals("player") && !ge.username.equals(username)) {
-                            String reply = engine.onChatMessage(ge.username, ge.text);
-                            if (reply != null && reply.trim().length() > 0) {
-                                sendMessage(reply);
-                            }
-                        }
-                    } else if (GameEvent.GAME_EVENT_TYPE_FULL.equals(ge.type)) {
-                        setMyColor(ge.white, ge.black);
-                        engine.initializeBoardState(ge.initialFen, myColor == Color.WHITE);
-                        engine.updateGameState(ge.state.moves, ge.state.wtime, ge.state.btime, ge.state.winc, ge.state.binc);
-                        if (isMyMove(ge.state.moves)) {
-                            makeMove(engine.makeMove());
-                        }
-                    } else if (GameEvent.GAME_EVENT_TYPE_STATE.equals(ge.type)) {
-                        engine.updateGameState(ge.moves, ge.wtime, ge.btime, ge.winc, ge.binc);
-                        if (isMyMove(ge.moves)) {
-                            makeMove(engine.makeMove());
-                        }
-                    }
-                });
+                client.stream("api/bot/game/stream/" + gameId, GameEvent.class, this::processEvent);
             } catch (Exception e) {
                 System.out.println("Exception occurred during game " + gameId + ". Game processing stopped.");
                 e.printStackTrace();
                 throw new RuntimeException("Exception occurred during game", e);
+            }
+        }
+        
+        private void processEvent(GameEvent ge) throws IOException {
+            switch (ge.type) {
+            case CHAT:
+                if (ge.room.equals("player") && !ge.username.equals(username)) {
+                    String reply = engine.onChatMessage(ge.username, ge.text);
+                    if (reply != null && reply.trim().length() > 0) {
+                        sendMessage(reply);
+                    }
+                }
+                break;
+                
+            case FULL:
+                setMyColor(ge.white, ge.black);
+                engine.initializeBoardState(ge.initialFen, myColor == Color.WHITE);
+                engine.updateGameState(ge.state.moves, ge.state.wtime, ge.state.btime, ge.state.winc, ge.state.binc);
+                if (isMyMove(ge.state.moves)) {
+                    makeMove(engine.makeMove());
+                }
+                break;
+                
+            case STATE:
+                engine.updateGameState(ge.moves, ge.wtime, ge.btime, ge.winc, ge.binc);
+                if (isMyMove(ge.moves)) {
+                    makeMove(engine.makeMove());
+                }
+                break;
             }
         }
 

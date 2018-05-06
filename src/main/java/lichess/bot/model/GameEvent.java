@@ -1,11 +1,9 @@
 package lichess.bot.model;
 
-public class GameEvent {
-    public static String GAME_EVENT_TYPE_FULL = "gameFull";
-    public static String GAME_EVENT_TYPE_STATE = "gameState";
-    public static String GAME_EVENT_TYPE_CHAT = "chatLine";
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-    public String type;
+public class GameEvent {
+    public GameEventType type;
 
     // full
     public String id;
@@ -31,4 +29,10 @@ public class GameEvent {
     public String username;
     public String text;
     public String room;
+    
+    public enum GameEventType {
+        @JsonProperty("gameFull") FULL,
+        @JsonProperty("gameState") STATE,
+        @JsonProperty("chatLine") CHAT;
+    }
 }

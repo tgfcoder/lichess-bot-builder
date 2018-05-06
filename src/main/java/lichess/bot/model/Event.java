@@ -1,10 +1,9 @@
 package lichess.bot.model;
 
-public class Event {
-    public static String EVENT_TYPE_CHALLENGE = "challenge";
-    public static String EVENT_TYPE_GAME_START = "gameStart";
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-    public String type;
+public class Event {
+    public EventType type;
     public Challenge challenge;
     public GameStart game;
 
@@ -25,4 +24,8 @@ public class Event {
         public String id;
     }
 
+    public enum EventType {
+        @JsonProperty("challenge") CHALLENGE,
+        @JsonProperty("gameStart") GAME_START;
+    }
 }
